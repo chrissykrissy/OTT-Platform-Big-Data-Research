@@ -1,0 +1,56 @@
+//load table including all Amazon movies
+create table amazonMovies(title STRING, imdbR STRING, year STRING, age STRING, platform STRING) 
+ROW FORMAT SERDE 'org.apache.hadoop.hive.serde2.OpenCSVSerde' STORED AS TEXTFILE;
+load data inpath 'hdfs://horton.hpc.nyu.edu:8020/user/jj2174/final/input/cleanedAmazon.csv' 
+overwrite into table amazonMovies;
+
+//load table of only original Amazon movies
+create table amazonOMovies(title STRING, platform STRING, is_Original INT) 
+ROW FORMAT SERDE 'org.apache.hadoop.hive.serde2.OpenCSVSerde' STORED AS TEXTFILE; 
+load data inpath 'hdfs://horton.hpc.nyu.edu:8020/user/jj2174/final/input/cleanedOriginal.csv' 
+overwrite into table amazonOMovies;
+
+insert overwrite table amazonMovies select distinct * from amazonMovies;
+//get rid of entries with no year and years >= 2019 for fair analysis
+insert overwrite table amazonMovies select * FROM amazonMovies WHERE year != "None" AND year <= 2019;
+
+//create a roughmid table
+create table roughmid(title STRING, imdbR STRING, year STRING, age STRING, platform STRING, is_original STRING) 
+ROW FORMAT SERDE 'org.apache.hadoop.hive.serde2.OpenCSVSerde' STORED AS TEXTFILE; 
+
+//distinguish original within all Amazon movie data
+INSERT OVERWRITE TABLE roughmid SELECT c.title, c.imdbR, c.year, c.age, c.platform, o.is_original 
+FROM amazonMovies c LEFT OUTER JOIN amazonomovies o ON (c.title = o.title);
+
+//load imdbRating table (contains imdbRatings)
+create table imdbRating(tconst STRING, avgRating Double, numVotes INT) 
+ROW FORMAT DELIMITED FIELDS TERMINATED BY '\t' STORED AS TEXTFILE; 
+load data inpath 'hdfs://horton.hpc.nyu.edu:8020/user/jj2174/final/input/imdbRating.tsv' 
+overwrite into table imdbRating;
+
+//load imdbBasic table (contains imdb ids)
+create table imdbBasic(tconst STRING, titletype STRING, primaryT String, OriginalT String, isAdult INT, startyear STRING, endYear String, runtime STRING, genre STRING) 
+ROW FORMAT DELIMITED FIELDS TERMINATED BY '\t' STORED AS TEXTFILE; 
+load data inpath 'hdfs://horton.hpc.nyu.edu:8020/user/jj2174/final/input/imdbBasic.tsv' 
+overwrite into table imdbBasic;
+
+create table imdbonlym(tconst STRING, title STRING, year STRING) 
+ROW FORMAT DELIMITED FIELDS TERMINATED BY '\t' STORED AS TEXTFILE;
+
+//since the imdb file was too large and took too long to process, filtered only movies
+insert overwrite table imdbonlym select tconst, primaryT, startyear from imdbbasic WHERE titletype = "movie";
+insert overwrite table imdbonlym select * from imdbonlym WHERE year <= 2019 AND year != "NULL";
+
+create table imdbwr (tconst STRING, title STRING, year INT, rating Double) 
+ROW FORMAT DELIMITED FIELDS TERMINATED BY '\t' STORED AS TEXTFILE;
+
+//problem: there were multiple movies with same titles but different year and maturity ratings
+insert overwrite table imdbwr select c.tconst, c.title, c.year, o.avgrating 
+from imdbonlym c JOIN imdbrating o ON (c.tconst = o.tconst);
+
+create table midS(title STRING, imdbR STRING, year STRING, age STRING, platform STRING, is_original INT, imdb_id STRING) 
+ROW FORMAT SERDE 'org.apache.hadoop.hive.serde2.OpenCSVSerde' STORED AS TEXTFILE;
+ 
+//to fix the complication, matched the imdb id only when the title, the year and imdbRating is the same
+insert overwrite table midS select c.title, c.imdbR, c.year, c.age, c.platform, c.is_original, o.tconst 
+FROM roughmid c JOIN imdbwr o ON (c.title = o.title AND c.year = o.year AND c.imdbr = o.rating);
