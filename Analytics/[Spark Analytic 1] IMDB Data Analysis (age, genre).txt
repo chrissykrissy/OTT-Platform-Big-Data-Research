@@ -1,0 +1,52 @@
+val amazonMid = (spark.read.format("csv")
+      .option("inferSchema", "true")
+      .option("sep",",")
+      .option("header", "false")
+      .load("final/input/midS.csv") // file path in hdfs
+			.toDF("title", "rating", "year", "age", "platform", "is_original", "imdb_id"))
+
+val basic = (spark.read.format("csv")
+      .option("inferSchema", "true")
+      .option("sep","\\t")
+      .option("header", "true")
+      .load("final/input/imdbBasic.tsv")) // file path in hdfs
+
+amazonMid.createOrReplaceTempView("AMAZON")
+basic.createOrReplaceTempView("BASIC")
+
+amazonMid.show();
+basic.show();
+
+val amazonGenre = spark.sql("select d.*, b.genres from AMAZON d INNER JOIN BASIC b ON d.imdb_id = b.tconst")
+amazonGenre.show();
+
+amazonGenre.createOrReplaceTempView("AMAZON_GENRE")
+
+amazonGenre.write.option("header", "true").format("csv").save("Final_Code_Drop/amazon_final")
+
+val amazon = spark.read.format("csv").option("header", "true").load("Final_Code_Drop/amazon_final/*")
+
+//match the maturity rating with others
+val amazonAgeAgg = (amazon.withColumn("age", when($"age" === "18+", "TV-MA") 
+.when($"age" === "16+", "TV-14") 
+.when($"age" === "13+", "TV-PG") 
+.when($"age" === "7+", "TV-Y7") 
+.when($"age" === "ALL", "TV-G") 
+.when($"age" === "NR", "N/A") 
+.otherwise($"age")) ).groupBy("age").agg(count("age"), avg("rating"))
+
+amazonAgeAgg.show();
+
+val amazonGenreFlat = amazon.withColumn("genres", explode(split($"genres", ","))) 
+val amazonGenreAgg = amazonGenreFlat.groupBy("genres").agg(count("age"), avg("rating")) 
+
+amazonGenreAgg.collect.foreach(println);
+
+//write to file
+amazonAgeAgg.write.option("header", "false").format("csv").save("Final_Code_Drop/amazon_age") 
+amazonGenreAgg.write.option("header", "false").format("csv").save("Final_Code_Drop/amazon_genre")
+
+//write to local
+//hadoop fs -getmerge Final_Code_Drop/amazon_final/* amazon_finalS.csv
+//hadoop fs -getmerge Final_Code_Drop/amazon_age/* amazon_age.csv
+//hadoop fs -getmerge Final_Code_Drop/amazon_genre/* amazon_genre.csv

@@ -1,0 +1,149 @@
+//Loading Necessary Data
+val gs = (spark.read.format("csv")
+	.option ("inferSchema", "true")
+	.option("sep", "," )
+	.option("header", "true")
+	.load("final/input/genome-scores.csv"))
+
+val rat = (spark.read.format("csv")
+      .option("inferSchema", "true")
+      .option("sep",",")
+      .option("header", "true")
+      .load("final/input/ratings.csv"))
+
+val movies = (spark.read.format("csv")
+      .option("inferSchema", "true")
+      .option("sep",",")
+      .option("header", "true")
+      .load("final/input/movies.csv"))
+
+val amazonMid = (spark.read.format("csv")
+      .option("inferSchema", "true")
+      .option("sep",",")
+      .option("header", "false")
+      .load("final/input/midS.csv")
+      .toDF("title", "rating", "year", "age", "platform", "is_original", "imdb_id"))
+
+val gt = (spark.read.format("csv")
+      .option("inferSchema", "true")
+      .option("sep",",")
+      .option("header", "true")
+      .load("final/input/genome-tags.csv"))
+
+val imdb = (spark.read.format("csv")
+      .option("inferSchema", "true")
+      .option("sep",",")
+      .option("header", "true")
+      .load("final/input/links.csv"))
+
+amazonMid.createOrReplaceTempView("AMAZON")
+gs.createOrReplaceTempView("GS")
+gt.createOrReplaceTempView("GT")
+movies.createOrReplaceTempView("MOVIES")
+rat.createOrReplaceTempView("RAT")
+imdb.createOrReplaceTempView("IMDB")
+
+//Modifying IMDB ttconst (ID) Column
+//amazonMid had imdb_id in form of "tt"+ leading zeros + integer
+//got rid of "tt" infront by extracting only degits
+val imdbtemp = amazonMid.withColumn("imdb_id", regexp_extract($"imdb_id", "\\d+", 0))
+imdbtemp.createOrReplaceTempView("TEMP")
+
+//got rid of leading zeros
+val regex = imdbtemp.withColumn("imdb_id", regexp_replace(imdbtemp("imdb_id"),"^0*", ""))
+regex.createOrReplaceTempView("REGEX")
+
+//created another column with modified imdb id
+val mID = spark.sql("select d.title, d.is_original, b.movieId from REGEX d INNER JOIN IMDB b ON d.imdb_id = b.imdbId")
+
+mID.count() //only 1017 matches
+mID.createOrReplaceTempView("MID")
+
+//Original Movie Analysis
+//extracted tags with relevance >= 0.8
+val gAddr = spark.sql("select d.movieId, b.tagId, b.relevance from MID d INNER JOIN GS b ON d.movieId = b.movieId where d.is_original = 1 AND relevance >= 0.8")
+gAddr.createOrReplaceTempView("GADD")
+
+val tagG = gAddr.groupBy("tagId").agg(count("tagId"),avg("relevance"))
+tagG.show()
+
+//Getting Average Rating for Original Movies
+val gAddR = spark.sql("select d.movieId, b.rating from GADD d INNER JOIN RAT b ON d.movieId = b.movieId")
+val gAddRAgg = gAddR.groupBy("movieId").avg("rating")
+gAddRAgg.show()
+
+//wrote to a file to join for the final complete analysis
+gAddRAgg.write.option("header","false").format("csv").save("Final_Code_Drop/gAddRAgg")
+
+//hadoop fs -getmerge Final_Code_Drop/gAddRAgg/* gAddRAgg.csv
+//hdfs dfs -put gAddRAgg.csv final/input
+
+//Final Result - Original Movies
+//load the average rating data
+val gAddRAgg = (spark.read.format("csv")
+      .option("inferSchema", "true")
+      .option("sep",",")
+      .option("header", "false")
+      .load("final/input/gAddRAgg.csv")
+			.toDF("movieId", "avg_rating"))
+
+gAddRAgg.createOrReplaceTempView("GADDRAGG")
+
+val gsemif = spark.sql("select d.*, b.avg_rating from GADD d INNER JOIN GADDRAGG b ON d.movieId = b.movieId")
+
+gsemif.createOrReplaceTempView("GSEMIF")
+
+val tagG2 = gsemif.groupBy("tagId").agg(count("tagId"),avg("relevance"),avg("avg_rating"))
+tagG2.createOrReplaceTempView("TG2")
+
+val finalO = spark.sql("select b.tag, d.* from TG2 d INNER JOIN GT b ON d.tagId = b.tagId")
+val finalO2 = finalO.sort(desc("count(tagId)"))
+
+finalO2.show()
+
+//wrote to a file
+finalO2.write.option("header","false").format("csv").save("Final_Code_Drop/groupLens_amazon")
+//hadoop fs -getmerge Final_Code_Drop/groupLens_amazon/* groupLens_amazon.csv
+
+//Non-original Amazon Movie Analysis
+val gAddno = spark.sql("select d.movieId, b.tagId, b.relevance from MID d INNER JOIN GS b ON d.movieId = b.movieId where d.is_original IS NULL AND relevance >= 0.8")
+val tagGno = gAddno.groupBy("tagId").agg(count("tagId"),avg("relevance"))
+gAddno.createOrReplaceTempView("GANO")
+tagGno.show()
+
+//Getting Average Rating for non-original Amazon Movies
+val gAddnoR = spark.sql("select d.movieId, b.rating from GANO d INNER JOIN RAT b ON d.movieId = b.movieId")
+val gAddnoRAgg = gAddnoR.groupBy("movieId").avg("rating")
+gAddnoRAgg.show()
+
+//wrote to a file to join for the final complete analysis
+gAddnoRAgg.write.option("header","false").format("csv").save("Final_Code_Drop/gAddnoRAgg")
+
+//hadoop fs -getmerge Final_Code_Drop/gAddnoRAgg/* gAddnoRAgg.csv
+//hdfs dfs -put gAddnoRAgg.csv final/input
+
+//Final Result - non-original Amazon Movies
+val gAddnoRAgg = (spark.read.format("csv")
+      .option("inferSchema", "true")
+      .option("sep",",")
+      .option("header", "false")
+      .load("final/input/gAddnoRAgg.csv")
+			.toDF("movieId", "avg_rating"))
+
+gAddnoRAgg.createOrReplaceTempView("GANOAGG")
+
+val gsemif2 = spark.sql("select d.*, b.avg_rating from GANO d INNER JOIN GANOAGG b ON d.movieId = b.movieId")
+
+gsemif2.createOrReplaceTempView("GSEMIF2")
+
+val tagnoG2 = gsemif2.groupBy("tagId").agg(count("tagId"),avg("relevance"),avg("avg_rating"))
+tagnoG2.createOrReplaceTempView("TGNO2")
+
+val finalNO = spark.sql("select b.tag, d.* from TGNO2 d INNER JOIN GT b ON d.tagId = b.tagId")
+val finalNO2 = finalNO.sort(desc("count(tagId)"))
+
+finalNO2.show()
+
+//write to file
+finalNO2.write.option("header","false").format("csv").save("Final_Code_Drop/groupLens_amazonNO")
+//hadoop fs -getmerge Final_Code_Drop/groupLens_amazonNO/* groupLens_amazonNO.csv
