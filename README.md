@@ -3,6 +3,8 @@ Topic: SmartStream: Which Service Should I Choose?
 
 We investigated different OTT platform data sets to provide users with insights into each platform to determine which services to subscribe to. Amongst multiple factors affecting online streaming subscriptions, we mainly analyzed age, genre and genome-tags using Spark and Hive.
 
+for full research paper visit : https://docs.google.com/document/d/1C05Z8HRdk2AU7fl46aK2b7WpDHYyiF02pJL9_GSziK0/edit?usp=sharing 
+
 ## Profiling
 This is the code for profiling the data sets. This mainly checks how many records are in the data sets. We used this code before and after cleaning. 
 
